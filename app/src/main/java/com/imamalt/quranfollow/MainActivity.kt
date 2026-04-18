@@ -248,8 +248,7 @@ private fun buildLineAnnotatedString(
             withStyle(
                 SpanStyle(
                     background = if (isCurrentWord) Color(0xFFFFF176) else Color.Transparent,
-                    fontWeight = if (isCurrentWord) FontWeight.Bold else FontWeight.Normal,
-                    color = MaterialTheme.colorScheme.onSurface
+                    fontWeight = if (isCurrentWord) FontWeight.Bold else FontWeight.Normal
                 )
             ) {
                 append(word.text)
