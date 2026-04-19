@@ -25,19 +25,41 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK tools only
-        uses: android-actions/setup-android@v3.2.2
-        with:
-          packages: ''
-          accept-android-sdk-licenses: 'yes'
-          log-accepted-android-sdk-licenses: 'false'
+      - name: Locate Android SDK and sdkmanager
+        shell: bash
+        run: |
+          set -euxo pipefail
+          echo "ANDROID_HOME=${ANDROID_HOME:-}"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
 
-      - name: Accept Android SDK licenses explicitly
-        run: yes | sdkmanager --licenses > /dev/null
+          if command -v sdkmanager >/dev/null 2>&1; then
+            SDKMANAGER_PATH="$(command -v sdkmanager)"
+          elif [ -n "${ANDROID_SDK_ROOT:-}" ] && [ -x "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER_PATH="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
+          elif [ -n "${ANDROID_HOME:-}" ] && [ -x "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKMANAGER_PATH="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          else
+            SDKMANAGER_PATH="$(find /usr/local/lib/android -type f -name sdkmanager 2>/dev/null | head -n 1)"
+          fi
+
+          if [ -z "${SDKMANAGER_PATH}" ]; then
+            echo "sdkmanager not found on runner" >&2
+            exit 1
+          fi
+
+          echo "SDKMANAGER=${SDKMANAGER_PATH}" >> "$GITHUB_ENV"
+
+      - name: Accept Android SDK licenses
+        shell: bash
+        run: |
+          set -euxo pipefail
+          yes | "$SDKMANAGER" --licenses > /dev/null
 
       - name: Install Android SDK packages
+        shell: bash
         run: |
-          sdkmanager --install \
+          set -euxo pipefail
+          "$SDKMANAGER" --install \
             "platform-tools" \
             "platforms;android-34" \
             "build-tools;34.0.0"
@@ -48,7 +70,7 @@ jobs:
           gradle-version: 8.7
 
       - name: Build debug APK
-        run: gradle --no-daemon assembleDebug
+        run: gradle --no-daemon --stacktrace assembleDebug
 
       - name: Upload debug APK artifact
         uses: actions/upload-artifact@v6
