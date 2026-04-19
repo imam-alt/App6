@@ -14,21 +14,23 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -47,7 +49,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import java.util.Locale
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -65,26 +66,38 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun QuranFollowScreen() {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val lines = remember { buildSampleLines() }
-    val flatWords = remember(lines) { lines.flatten() }
+    val repository = remember { QuranRepository() }
     val listState = rememberLazyListState()
 
-    var currentWordIndex by rememberSaveable { mutableStateOf(-1) }
-    var recognizedText by rememberSaveable { mutableStateOf("") }
-    var statusText by rememberSaveable { mutableStateOf("Tekan mulai untuk mendengar bacaan") }
+    var chapterCatalog by remember { mutableStateOf<List<QuranChapterIndex>>(emptyList()) }
+    var selectedChapterId by rememberSaveable { mutableStateOf(1) }
+    var currentChapter by remember { mutableStateOf<QuranChapter?>(null) }
+    var isCatalogLoading by remember { mutableStateOf(true) }
+    var isChapterLoading by remember { mutableStateOf(false) }
+    var loadingError by remember { mutableStateOf<String?>(null) }
+    var showChapterPicker by remember { mutableStateOf(false) }
+
+    var recognizedText by rememberSaveable(selectedChapterId) { mutableStateOf("") }
+    var statusText by rememberSaveable(selectedChapterId) {
+        mutableStateOf("Tekan mulai untuk mendengar bacaan")
+    }
+    var matchStatusText by rememberSaveable(selectedChapterId) {
+        mutableStateOf("Belum ada kecocokan")
+    }
+    var activeGlobalIndex by rememberSaveable(selectedChapterId) { mutableStateOf(-1) }
+    var activeVerseId by rememberSaveable(selectedChapterId) { mutableStateOf(-1) }
     var isListening by rememberSaveable { mutableStateOf(false) }
 
-    val currentLineIndex = if (currentWordIndex >= 0) flatWords[currentWordIndex].lineIndex else -1
+    val currentChapterMeta = chapterCatalog.firstOrNull { it.id == selectedChapterId }
+    val matcher = remember(currentChapter) {
+        currentChapter?.let { QuranMatcher(it) }
+    }
 
     val speechController = remember(context) {
         QuranSpeechController(
             context = context,
-            onRecognizedText = { rawText ->
-                recognizedText = rawText
-                val newIndex = findCurrentWordIndex(flatWords, rawText)
-                if (newIndex >= 0) {
-                    currentWordIndex = maxOf(currentWordIndex, newIndex)
-                }
+            onRecognizedText = { partialText ->
+                recognizedText = partialText
             },
             onStatusChanged = { newStatus ->
                 statusText = newStatus
@@ -101,9 +114,64 @@ private fun QuranFollowScreen() {
         }
     }
 
-    LaunchedEffect(currentLineIndex) {
-        if (currentLineIndex >= 0) {
-            val targetIndex = (currentLineIndex - 1).coerceAtLeast(0)
+    LaunchedEffect(Unit) {
+        isCatalogLoading = true
+        loadingError = null
+        try {
+            chapterCatalog = repository.loadChapterIndex()
+            if (chapterCatalog.isNotEmpty() && chapterCatalog.none { it.id == selectedChapterId }) {
+                selectedChapterId = chapterCatalog.first().id
+            }
+        } catch (exception: Exception) {
+            loadingError = exception.message ?: "Gagal memuat daftar surat"
+        } finally {
+            isCatalogLoading = false
+        }
+    }
+
+    LaunchedEffect(currentChapterMeta?.id) {
+        val targetMeta = currentChapterMeta ?: return@LaunchedEffect
+        isChapterLoading = true
+        loadingError = null
+        currentChapter = null
+        recognizedText = ""
+        statusText = "Surat dimuat. Siap mendengar bacaan."
+        matchStatusText = "Menunggu bacaan untuk dikunci dengan konteks ayat."
+        activeGlobalIndex = -1
+        activeVerseId = -1
+        try {
+            currentChapter = repository.loadChapter(targetMeta)
+        } catch (exception: Exception) {
+            loadingError = exception.message ?: "Gagal memuat isi surat"
+        } finally {
+            isChapterLoading = false
+        }
+    }
+
+    LaunchedEffect(recognizedText, matcher) {
+        val localMatcher = matcher ?: return@LaunchedEffect
+        if (recognizedText.isBlank()) return@LaunchedEffect
+
+        val result = localMatcher.findBestMatch(
+            recognizedText = recognizedText,
+            currentAnchorGlobalIndex = activeGlobalIndex.takeIf { it >= 0 }
+        )
+
+        if (result == null) {
+            matchStatusText = "Belum ada kandidat posisi yang cocok."
+            return@LaunchedEffect
+        }
+
+        matchStatusText = result.statusMessage
+        if (result.isConfident) {
+            activeGlobalIndex = result.activeGlobalIndex
+            activeVerseId = result.activeVerseId
+        }
+    }
+
+    LaunchedEffect(activeVerseId) {
+        if (activeVerseId > 0) {
+            val targetIndex = (activeVerseId - 2).coerceAtLeast(0)
             listState.animateScrollToItem(targetIndex)
         }
     }
@@ -131,9 +199,42 @@ private fun QuranFollowScreen() {
             fontWeight = FontWeight.Bold
         )
         Text(
-            text = "Demo MVP: mendengar bacaan, menandai kata aktif, menandai baris aktif, lalu otomatis scroll saat bacaan turun ke bawah.",
+            text = "114 surat + matcher berbasis kata, frasa, dan konteks minimal 2 ayat untuk menahan ambiguitas kata yang berulang.",
             style = MaterialTheme.typography.bodyMedium
         )
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(
+                onClick = {
+                    if (selectedChapterId > 1) selectedChapterId -= 1
+                },
+                enabled = selectedChapterId > 1 && chapterCatalog.isNotEmpty()
+            ) {
+                Text("Sebelumnya")
+            }
+            OutlinedButton(
+                onClick = { showChapterPicker = true },
+                enabled = chapterCatalog.isNotEmpty()
+            ) {
+                Text("Pilih Surat")
+            }
+            OutlinedButton(
+                onClick = {
+                    if (selectedChapterId < 114) selectedChapterId += 1
+                },
+                enabled = selectedChapterId < 114 && chapterCatalog.isNotEmpty()
+            ) {
+                Text("Berikutnya")
+            }
+        }
+
+        Text(
+            text = currentChapterMeta?.let {
+                "Surat ${it.id}: ${it.transliteration} — ${it.name} (${it.totalVerses} ayat)"
+            } ?: "Memuat daftar 114 surat...",
+            fontWeight = FontWeight.SemiBold
+        )
+
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(
                 onClick = {
@@ -148,158 +249,155 @@ private fun QuranFollowScreen() {
                         permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                     }
                 },
-                enabled = !isListening
+                enabled = !isListening && currentChapter != null
             ) {
                 Text("Mulai Dengarkan")
             }
             OutlinedButton(
                 onClick = {
                     speechController.stopListening()
-                    currentWordIndex = -1
                     recognizedText = ""
-                    statusText = "Status direset"
+                    activeGlobalIndex = -1
+                    activeVerseId = -1
+                    statusText = "Perekaman dihentikan"
+                    matchStatusText = "Posisi direset. Menunggu konteks baru."
                 }
             ) {
                 Text("Stop / Reset")
             }
         }
 
-        Text(text = "Status: $statusText")
+        Text(text = "Status sistem: $statusText")
+        Text(text = "Status pencocokan: $matchStatusText")
         Text(text = "Teks terdeteksi: $recognizedText")
 
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-            contentPadding = PaddingValues(vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            itemsIndexed(lines) { lineIndex, lineWords ->
-                val isActiveLine = lineIndex == currentLineIndex
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = if (isActiveLine) {
-                        MaterialTheme.colorScheme.primaryContainer
-                    } else {
-                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
-                    },
-                    tonalElevation = if (isActiveLine) 4.dp else 0.dp,
-                    shape = MaterialTheme.shapes.large
+        when {
+            isCatalogLoading || isChapterLoading -> {
+                Text("Sedang memuat data Qur'an...")
+            }
+            loadingError != null -> {
+                Text(
+                    text = "Error: $loadingError",
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+            currentChapter == null -> {
+                Text("Data surat belum tersedia.")
+            }
+            else -> {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Text(
-                        text = buildLineAnnotatedString(lineWords, currentWordIndex),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 18.dp),
-                        textAlign = TextAlign.End,
-                        fontSize = 28.sp,
-                        lineHeight = 42.sp
-                    )
+                    items(currentChapter!!.verses, key = { verse -> verse.id }) { verse ->
+                        val isActiveVerse = verse.id == activeVerseId
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = if (isActiveVerse) {
+                                MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+                            },
+                            tonalElevation = if (isActiveVerse) 4.dp else 0.dp,
+                            shape = MaterialTheme.shapes.large
+                        ) {
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Text(
+                                    text = "Ayat ${verse.id}",
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                Text(
+                                    text = buildVerseAnnotatedString(
+                                        verse = verse,
+                                        activeGlobalIndex = activeGlobalIndex
+                                    ),
+                                    modifier = Modifier.fillMaxWidth(),
+                                    textAlign = TextAlign.End,
+                                    fontSize = 26.sp,
+                                    lineHeight = 40.sp
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
     }
-}
 
-private data class DisplayWord(
-    val text: String,
-    val normalized: String,
-    val globalIndex: Int,
-    val lineIndex: Int
-)
-
-private fun buildSampleLines(): List<List<DisplayWord>> {
-    val rawLines = listOf(
-        listOf("بِسْمِ", "اللَّهِ", "الرَّحْمَٰنِ", "الرَّحِيمِ"),
-        listOf("الْحَمْدُ", "لِلَّهِ", "رَبِّ", "الْعَالَمِينَ"),
-        listOf("الرَّحْمَٰنِ", "الرَّحِيمِ"),
-        listOf("مَالِكِ", "يَوْمِ", "الدِّينِ"),
-        listOf("إِيَّاكَ", "نَعْبُدُ", "وَإِيَّاكَ", "نَسْتَعِينُ"),
-        listOf("اهْدِنَا", "الصِّرَاطَ", "الْمُسْتَقِيمَ"),
-        listOf("صِرَاطَ", "الَّذِينَ", "أَنْعَمْتَ", "عَلَيْهِمْ"),
-        listOf("غَيْرِ", "الْمَغْضُوبِ", "عَلَيْهِمْ", "وَلَا", "الضَّالِّينَ")
-    )
-
-    var globalIndex = 0
-    val result = mutableListOf<List<DisplayWord>>()
-
-    rawLines.forEachIndexed { lineIndex, words ->
-        val line = words.map { word ->
-            DisplayWord(
-                text = word,
-                normalized = normalizeArabic(word),
-                globalIndex = globalIndex++,
-                lineIndex = lineIndex
-            )
-        }
-        result += line
+    if (showChapterPicker) {
+        ChapterPickerDialog(
+            chapters = chapterCatalog,
+            selectedChapterId = selectedChapterId,
+            onDismiss = { showChapterPicker = false },
+            onSelect = { chapterId ->
+                selectedChapterId = chapterId
+                showChapterPicker = false
+            }
+        )
     }
-
-    return result
 }
 
-private fun buildLineAnnotatedString(
-    words: List<DisplayWord>,
-    currentWordIndex: Int
+@Composable
+private fun ChapterPickerDialog(
+    chapters: List<QuranChapterIndex>,
+    selectedChapterId: Int,
+    onDismiss: () -> Unit,
+    onSelect: (Int) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Tutup")
+            }
+        },
+        title = {
+            Text("Pilih surat")
+        },
+        text = {
+            LazyColumn(modifier = Modifier.heightIn(max = 420.dp)) {
+                items(chapters, key = { chapter -> chapter.id }) { chapter ->
+                    TextButton(
+                        onClick = { onSelect(chapter.id) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = if (chapter.id == selectedChapterId) {
+                                "✓ ${chapter.id}. ${chapter.transliteration} — ${chapter.name}"
+                            } else {
+                                "${chapter.id}. ${chapter.transliteration} — ${chapter.name}"
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                }
+            }
+        }
+    )
+}
+
+private fun buildVerseAnnotatedString(
+    verse: QuranVerse,
+    activeGlobalIndex: Int
 ): AnnotatedString {
     return buildAnnotatedString {
-        words.forEachIndexed { index, word ->
-            val isCurrentWord = word.globalIndex == currentWordIndex
+        verse.words.forEachIndexed { index, word ->
+            val isActiveWord = word.globalIndex == activeGlobalIndex
             withStyle(
                 SpanStyle(
-                    background = if (isCurrentWord) Color(0xFFFFF176) else Color.Transparent,
-                    fontWeight = if (isCurrentWord) FontWeight.Bold else FontWeight.Normal
+                    background = if (isActiveWord) Color(0xFFFFF176) else Color.Transparent,
+                    fontWeight = if (isActiveWord) FontWeight.Bold else FontWeight.Normal
                 )
             ) {
-                append(word.text)
+                append(word.displayText)
             }
-            if (index < words.lastIndex) append(" ")
+            if (index < verse.words.lastIndex) append(" ")
         }
     }
-}
-
-private fun findCurrentWordIndex(
-    words: List<DisplayWord>,
-    recognizedText: String
-): Int {
-    val recognizedTokens = tokenizeArabic(recognizedText)
-    if (recognizedTokens.isEmpty()) return -1
-
-    var matchedIndex = -1
-    val limit = minOf(words.size, recognizedTokens.size)
-
-    for (index in 0 until limit) {
-        if (words[index].normalized == recognizedTokens[index]) {
-            matchedIndex = index
-        } else {
-            break
-        }
-    }
-
-    return matchedIndex
-}
-
-private fun tokenizeArabic(text: String): List<String> {
-    return text
-        .split(" ", "\n", "\t")
-        .map { normalizeArabic(it) }
-        .filter { it.isNotBlank() }
-}
-
-private fun normalizeArabic(input: String): String {
-    return input
-        .lowercase(Locale("ar"))
-        .replace(Regex("[ًٌٍَُِّْـٰ]"), "")
-        .replace('أ', 'ا')
-        .replace('إ', 'ا')
-        .replace('آ', 'ا')
-        .replace('ٱ', 'ا')
-        .replace('ى', 'ي')
-        .replace('ؤ', 'و')
-        .replace('ئ', 'ي')
-        .replace(Regex("[^\u0621-\u064A ]"), "")
-        .trim()
 }
 
 private class QuranSpeechController(
@@ -371,7 +469,7 @@ private class QuranSpeechController(
                 SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Izin mikrofon kurang"
                 SpeechRecognizer.ERROR_NETWORK -> "Error jaringan"
                 SpeechRecognizer.ERROR_NETWORK_TIMEOUT -> "Jaringan timeout"
-                SpeechRecognizer.ERROR_NO_MATCH -> "Tidak ada kata yang cocok"
+                SpeechRecognizer.ERROR_NO_MATCH -> "Belum ada frasa yang bisa dikunci"
                 SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Recognizer sedang sibuk"
                 SpeechRecognizer.ERROR_SERVER -> "Error server"
                 SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Tidak ada suara masuk"
