@@ -13,7 +13,7 @@ env:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
@@ -25,13 +25,22 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
+      - name: Setup Android SDK tools only
         uses: android-actions/setup-android@v3.2.2
         with:
-          packages: |
-            platform-tools
-            platforms;android-34
-            build-tools;34.0.0
+          packages: ''
+          accept-android-sdk-licenses: 'yes'
+          log-accepted-android-sdk-licenses: 'false'
+
+      - name: Accept Android SDK licenses explicitly
+        run: yes | sdkmanager --licenses > /dev/null
+
+      - name: Install Android SDK packages
+        run: |
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-34" \
+            "build-tools;34.0.0"
 
       - name: Setup Gradle 8.7
         uses: gradle/actions/setup-gradle@v5
@@ -39,7 +48,7 @@ jobs:
           gradle-version: 8.7
 
       - name: Build debug APK
-        run: gradle --no-daemon assembleDebug
+        run: ./gradlew --no-daemon assembleDebug
 
       - name: Upload debug APK artifact
         uses: actions/upload-artifact@v6
