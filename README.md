@@ -69,4 +69,4 @@ Saat push ke `main` atau menjalankan workflow manual, GitHub Actions akan mencob
 - Tambahkan forced alignment khusus Qur'an agar presisi kata jauh lebih tinggi.
 - Tambahkan mode melanjutkan tracking dari tengah surat / tengah ayat.
 
-<!-- workflow trigger refresh 2 -->
+<!-- workflow trigger refresh 3 -->
