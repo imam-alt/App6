@@ -68,3 +68,5 @@ Saat push ke `main` atau menjalankan workflow manual, GitHub Actions akan mencob
 - Ganti mode ayat-list menjadi **layout mushaf per halaman** dengan koordinat kata nyata.
 - Tambahkan forced alignment khusus Qur'an agar presisi kata jauh lebih tinggi.
 - Tambahkan mode melanjutkan tracking dari tengah surat / tengah ayat.
+
+<!-- workflow trigger refresh -->
