@@ -25,44 +25,14 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Locate Android SDK and sdkmanager
+      - name: Show Android environment
         shell: bash
         run: |
           set -euxo pipefail
           echo "ANDROID_HOME=${ANDROID_HOME:-}"
           echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-}"
-
-          if command -v sdkmanager >/dev/null 2>&1; then
-            SDKMANAGER_PATH="$(command -v sdkmanager)"
-          elif [ -n "${ANDROID_SDK_ROOT:-}" ] && [ -x "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" ]; then
-            SDKMANAGER_PATH="${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager"
-          elif [ -n "${ANDROID_HOME:-}" ] && [ -x "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" ]; then
-            SDKMANAGER_PATH="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
-          else
-            SDKMANAGER_PATH="$(find /usr/local/lib/android -type f -name sdkmanager 2>/dev/null | head -n 1)"
-          fi
-
-          if [ -z "${SDKMANAGER_PATH}" ]; then
-            echo "sdkmanager not found on runner" >&2
-            exit 1
-          fi
-
-          echo "SDKMANAGER=${SDKMANAGER_PATH}" >> "$GITHUB_ENV"
-
-      - name: Accept Android SDK licenses
-        shell: bash
-        run: |
-          set -euxo pipefail
-          yes | "$SDKMANAGER" --licenses > /dev/null
-
-      - name: Install Android SDK packages
-        shell: bash
-        run: |
-          set -euxo pipefail
-          "$SDKMANAGER" --install \
-            "platform-tools" \
-            "platforms;android-34" \
-            "build-tools;34.0.0"
+          command -v adb || true
+          command -v aapt || true
 
       - name: Setup Gradle 8.7
         uses: gradle/actions/setup-gradle@v5
